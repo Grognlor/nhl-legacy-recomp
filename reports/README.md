@@ -7,3 +7,4 @@ For every future substantial task, create a new sequentially numbered Markdown r
 | Report | Objective | Status |
 | --- | --- | --- |
 | [001 — Initial performance investigation](001-initial-performance-investigation.md) | Investigate v0.6.0 rendering, synchronization, timing, and build constraints for an ASUS ROG Ally Z2A running Bazzite through Proton. | Source investigation complete; implementation and runtime profiling await instructions. |
+| [002 — Ally profiling and Linux feasibility](002-ally-profiling-and-linux-feasibility.md) | Inventory existing profiling tools, design a gameplay benchmark, and assess native Linux support at the pinned SDK revision. | Documentation investigation complete; profiling and implementation await instructions. |
