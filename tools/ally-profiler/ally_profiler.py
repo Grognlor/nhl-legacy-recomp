@@ -13,7 +13,16 @@ import sys
 import time
 import unittest
 
-BASE = Path.home() / 'nhl-ally-profiles'
+def default_output_base():
+    # HOME is the trusted boundary; Bazzite legitimately aliases /home to /var/home.
+    # Resolve only that root, never the dedicated output directory beneath it.
+    home = Path.home()
+    if not home.is_absolute() or '..' in home.parts:
+        raise ValueError('Home directory must be absolute and contain no traversal')
+    root = home.resolve(strict=True)
+    if not root.is_dir() or root == root.parent:
+        raise ValueError('Home directory must resolve to a non-root directory')
+    return root / 'nhl-ally-profiles'
 
 
 def reading(path, scale=1.0, unit=None):
@@ -230,9 +239,11 @@ def analyze_csv(path, source, per_frame=False, unit=None, skip=0, take=None):
     return result
 
 
-def new_run(base):
+def new_run(base=None):
     # Fixed dedicated output boundary; no arbitrary installation paths accepted.
-    base = base.expanduser()
+    base = default_output_base() if base is None else base.expanduser()
+    if not base.is_absolute() or '..' in base.parts:
+        raise ValueError('Output base must be absolute and contain no traversal')
     if base.is_symlink() or base.resolve() != base.absolute():
         raise ValueError('Output base must not contain symlinks')
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -247,7 +258,7 @@ def write_json(path, value):
 
 
 def collect(args):
-    run = new_run(BASE)
+    run = new_run()
     devices, errors = discover(Path('/sys/class/drm'))
     sampler = ProcSampler()
     write_json(run / 'metadata.json', {'schema': 1, 'session': args.session,
@@ -316,7 +327,7 @@ def main():
                 raise ValueError('Invalid row selection')
             result = analyze_csv(args.csv, args.source, args.per_frame, args.frametime_unit,
                                  args.skip_rows, args.take_rows)
-            run = new_run(BASE)
+            run = new_run()
             write_json(run / 'summary.json', result)
             print(json.dumps(result, indent=2, allow_nan=False))
             print(f'Analysis saved: {run / "summary.json"}', file=sys.stderr)

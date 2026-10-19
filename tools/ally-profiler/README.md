@@ -4,7 +4,7 @@ Standard-library Python 3.9+ tools for read-only AMD GPU and Linux process/threa
 
 ## Safety and output
 
-Run from the source checkout. All persistent tool output goes into unique timestamped directories under **`~/nhl-ally-profiles/`**. There is intentionally no arbitrary output-directory option. Keep this dedicated location separate from the game installation; do not place an installation there. Symlinked output bases/parents are rejected. Existing files are never overwritten. Temporary synthetic fixtures use the OS temporary directory and are removed after tests.
+Run from the source checkout. All persistent tool output goes into unique timestamped directories under **`~/nhl-ally-profiles/`**. The trusted home root is validated and canonicalized first, so Bazzite's `/home -> /var/home` alias is supported; the printed path may therefore start with `/var/home/`. There is intentionally no arbitrary output-directory option. Keep this dedicated location separate from the game installation; do not place an installation there. Symlinks at or below the dedicated output base are rejected when traversed, including dangling links; relative paths and `..` traversal are rejected. Existing files are never overwritten. Temporary synthetic fixtures use the OS temporary directory and are removed after tests.
 
 Reads are limited to discovered AMD DRM/hwmon nodes, selected `/proc/<pid>/stat`, `/proc/<pid>/status`, task stat/status files, and an explicitly supplied CSV. It does not search for game assets, identify a game automatically, read command lines/environments, or follow descendants. Select the Linux host PID of `nhllegacy.exe`, not Steam, Proton's launcher or wineserver. To observe another process explicitly, repeat `--pid`.
 

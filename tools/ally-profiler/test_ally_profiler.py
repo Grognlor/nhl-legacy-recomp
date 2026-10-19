@@ -161,7 +161,7 @@ class ProfilerTests(unittest.TestCase):
 
     def test_collector_writes_schema_without_live_reads(self):
         args = SimpleNamespace(session='desktop', pid=[123], duration=.01, interval=.5)
-        with patch.object(profiler, 'BASE', self.root / 'runs'), \
+        with patch.object(profiler, 'default_output_base', return_value=self.root / 'runs'), \
              patch.object(profiler, 'discover', return_value=([], ['synthetic missing GPU'])), \
              patch.object(profiler.ProcSampler, 'sample', return_value={'pid': 123, 'process': None,
                                                                        'errors': ['synthetic missing PID']}):
@@ -185,6 +185,57 @@ class ProfilerTests(unittest.TestCase):
         sampler.sample(123, 1)
         self.put('123/task/124/stat', fake_stat(124, 100, start=101))
         self.assertIsNone(sampler.sample(123, 2)['threads'][0]['cpu_percent_one_core'])
+
+    def bazzite_home(self):
+        canonical = self.root / 'var/home/cody'
+        canonical.mkdir(parents=True)
+        (self.root / 'home').symlink_to('var/home', target_is_directory=True)
+        return self.root / 'home/cody', canonical
+
+    def test_bazzite_home_alias_creates_unique_canonical_runs(self):
+        alias, canonical = self.bazzite_home()
+        with patch.object(Path, 'home', return_value=alias):
+            self.assertEqual(profiler.default_output_base(), canonical / 'nhl-ally-profiles')
+            first, second = profiler.new_run(), profiler.new_run()
+        self.assertEqual(first.parent, canonical / 'nhl-ally-profiles')
+        self.assertEqual(second.parent, first.parent)
+        self.assertNotEqual(first, second)
+        profiler.write_json(first / 'metadata.json', {'synthetic': True})
+        with self.assertRaises(FileExistsError):
+            profiler.write_json(first / 'metadata.json', {})
+
+    def test_bazzite_home_rejects_output_symlink_and_dangling_link(self):
+        alias, canonical = self.bazzite_home()
+        outside = self.root / 'unintended'
+        outside.mkdir()
+        base = canonical / 'nhl-ally-profiles'
+        for target in (outside, self.root / 'nonexistent'):
+            with self.subTest(target=target):
+                base.symlink_to(target, target_is_directory=True)
+                with patch.object(Path, 'home', return_value=alias), self.assertRaises(ValueError):
+                    profiler.new_run()
+                base.unlink()
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertFalse((self.root / 'nonexistent').exists())
+
+    def test_rejects_symlink_below_output_base_and_traversal(self):
+        base = self.root / 'nhl-ally-profiles'
+        base.mkdir()
+        outside = self.root / 'unintended'
+        outside.mkdir()
+        (base / 'redirect').symlink_to(outside, target_is_directory=True)
+        for path in (base / 'redirect/child', base / '../unintended', Path('relative')):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                profiler.new_run(path)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_invalid_home_roots_fail_before_output_creation(self):
+        plain_file = self.put('not-a-directory', 'synthetic')
+        for home in (Path('/'), Path('relative'), self.root / '../escape',
+                     self.root / 'missing', plain_file):
+            with self.subTest(home=home), patch.object(Path, 'home', return_value=home), \
+                 self.assertRaises((ValueError, OSError)):
+                profiler.new_run()
 
 
 if __name__ == '__main__':
