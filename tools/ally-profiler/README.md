@@ -153,3 +153,91 @@ For later passive scheduling context, record the current Linux TIDs rather than 
 - [Reports 001](../../reports/001-initial-performance-investigation.md) and [002](../../reports/002-ally-profiling-and-linux-feasibility.md).
 - [MangoHud 0.8.4 logger implementation](https://github.com/flightlessmango/MangoHud/blob/v0.8.4/src/logging.cpp): preamble/frame schema and elapsed units.
 - [MangoHud documentation](https://github.com/flightlessmango/MangoHud): overlay/logging and Gamescope integration. Installed-version/session behavior still needs a pilot.
+
+## Task 009: gated Desktop frame-time pilot
+
+This procedure supersedes the earlier provisional Desktop launch guidance. **Preparation is complete; the actual temporary Steam-to-Proton launch route is still blocked pending user confirmation and approval.** MangoHud 0.8.4 and both Vulkan layer manifests are installed. Application injection through the actual Proton session has not been tested. Do not run a capture or launch command until that gate is resolved.
+
+### Launch gate and temporary scope
+
+Confirm how you currently launch NHL: an existing native Steam shortcut, Flatpak Steam, or another launcher. No shortcut or prefix inspection is required to answer this. A possible nonpersistent route is a **fresh native Steam client** started with an environment confined to that client, followed by clicking the unchanged existing shortcut. This preserves Steam's responsibility for selecting Proton and its existing prefix. It also affects that client's descendants, rather than NHL alone, and remains unverified with the actual runtime/container. Obtain explicit approval for the client session lifecycle and normal game writes first. This task supplies no Steam launch command.
+
+Do not run Proton directly, invent `STEAM_COMPAT_DATA_PATH`, create a prefix, edit launch options, set a desktop/global environment, or assume `steam -applaunch` forwards a new environment to an existing client. Do not terminate an existing game/client to force this route. No current process can acquire a newly injected Vulkan layer merely because a shell variable changes. Avoid the `mangohud` wrapper around Steam: its installed implementation also adds an OpenGL shim to `LD_PRELOAD`; the intended pilot needs only the application Vulkan layer.
+
+For the future approved launch environment, review `MANGOHUD=1`, `MANGOHUD_CONFIGFILE=<printed absolute config path>`, no conflicting `MANGOHUD_CONFIG`, and no `DISABLE_MANGOHUD=1`. Do not overwrite existing loader variables. If environment/container propagation cannot be verified by a working pilot, stop; do not repair it through system or Steam changes.
+
+### Prepare external configuration, after launch-route agreement
+
+The following command creates only a unique private profiler directory and an external **20-second pilot** config, using the existing safety checks. It does not export variables or launch anything. It was reviewed against the installed options but not executed in Task 009. For later full runs, change `log_duration=20` to `log_duration=120` **in the snippet before executing it again**, producing a new directory/config. Do not edit a live config mid-comparison.
+
+```bash
+cd "$HOME/Projects/nhl-legacy-recomp" || exit 1
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path('tools/ally-profiler').resolve()))
+import ally_profiler
+run = ally_profiler.new_run()
+config = run / 'MangoHud.conf'
+with config.open('x') as stream:
+    stream.write('fps\nframe_timing\nlog_interval=0\nlog_duration=20\n'
+                 'toggle_logging=Shift_L+F2\npermit_upload=0\n'
+                 f'output_folder={run}\n')
+print(config)
+PY
+```
+
+Do not add `fps_limit`, VSync overrides, autostart, upload or GPU workload changes. Existing caps/settings must be recorded and preserved. The config does not validate any AMD utilization or power channel. New directories isolate sessions; MangoHud itself uses application/date/second filenames and append mode, not the profiler's exclusive-file guarantee. Avoid two logging starts within the same second; check for separate files and never concatenate captures.
+
+### Pilot, only after explicit approval
+
+1. Launch through the agreed unchanged Steam/Proton route. Check that the overlay appears **inside NHL**, rather than merely in Steam or a compositor. Do not use mangoapp or nested Gamescope for this Desktop test. A visible HUD alone is insufficient proof of per-frame export.
+2. Warm up five minutes in rendered gameplay. Keep 720p, 1×, VSync off, FSR on, shadows off and nominal 25 W. Record actual display mode/refresh, external/internal display, scaling, VRR and all caps; do not adjust them for the test.
+3. Identify the Linux game PID manually and collect **40 seconds** of telemetry for the 20-second pilot (later **150 seconds** around each 120-second log). The longer telemetry interval provides start/end margins; it does not synchronize the clocks automatically.
+
+```bash
+ps -eo pid,comm
+read -r -p 'Verified Linux nhllegacy.exe PID: ' NHL_PROFILE_PID
+python3 tools/ally-profiler/ally_profiler.py collect \
+  --session desktop --pid "$NHL_PROFILE_PID" --duration 40 --interval 0.5
+```
+
+4. With the collector running, return to the game and use **Left Shift+F2** once to start logging. Record stopwatch start/end and any focus-switch delay; do not count that setup portion as uninterrupted gameplay. Let the 20-second timer stop the pilot or press the same key once to stop early. Do not use unrelated upload/limiter hotkeys. If hotkeys fail, stop the procedure and report the failure; do not modify system bindings.
+5. After logging stops, inspect the external CSV while retaining the original. Select the application-named raw CSV, **not** `_summary.csv`. Reuse the analysis command below; the prompt avoids guessing a log filename.
+
+```bash
+read -r -p 'Absolute path to the completed raw MangoHud CSV: ' NHL_FRAME_CSV
+python3 tools/ally-profiler/ally_profiler.py analyze "$NHL_FRAME_CSV" \
+  --source mangohud-application --frametime-unit ms
+```
+
+Acceptance checks: expected application basename; one frame-metrics header; finite positive `frametime` values in **milliseconds**; `elapsed` finite/increasing in **nanoseconds relative to logging start**; no repeated header/concatenated sessions, malformed rows or long unexplained gaps. Manually compare row count N, `sum(frametime)/1000`, `(last_elapsed-first_elapsed)/1e9` and stopwatch duration. Account for first/last-frame edges and hotkey/focus uncertainty; do not invent a fixed tolerance. A 20-second log at 20–60 FPS would have roughly 400–1200 rows, a sanity range only, not an expected result. A few dozen rows would require investigating sampled logging. Compare elapsed increments against frame intervals; investigate sustained mismatch instead of forcing units. The existing importer validates frame values/shape but **does not validate `elapsed`** or prove cadence. Preserve Unknown if those checks cannot be completed.
+
+Only after these independent checks establish a complete per-frame stream:
+
+```bash
+python3 tools/ally-profiler/ally_profiler.py analyze "$NHL_FRAME_CSV" \
+  --source mangohud-application --frametime-unit ms --per-frame
+```
+
+The flag is a user assertion, not an automatic certification. Report p50/p95/p99 in ms (linear interpolation); mean FPS is `1000*N/sum(frame_ms)`. Report counts and frame fractions strictly above 16.67, 33.33, 50 and 100 ms. These thresholds describe long frames, not a diagnosis. Do not interpret p99 as 1% low FPS or average the CSV FPS column. No performance result is claimed until a real validated log exists.
+
+### Correlation and matched 120-second runs
+
+MangoHud elapsed starts independently at each logging toggle. Telemetry records UTC, `monotonic_ns`, relative seconds and collection duration; CPU percentages summarize differences between samples. CSV filenames have local wall-clock second resolution and cannot synchronize frames precisely. Host UTC can jump; relative monotonic clocks avoid wall-clock adjustments, but do not automatically share a known epoch with MangoHud.
+
+Record a manually bracketed logging-start interval using the same host clock as telemetry. This read-only marker command can be run immediately before switching to the game, and again after the start toggle if practical:
+
+```bash
+python3 -c 'import time; from datetime import datetime, timezone; print(time.monotonic_ns(), datetime.now(timezone.utc).isoformat())'
+```
+
+The two markers give a **coarse bracket**, including focus/input delay; do not call it millisecond synchronization. Keep those numeric notes with the capture, outside the installation. For elapsed E ns, a frame falls approximately within `[start_before+E, start_after+E]` in host monotonic time, subject also to producer timestamp semantics. If the bracket is wide, only compare larger windows; do not associate a single long frame with a particular 0.5-second CPU sample. Sensor reads span `collection_seconds` and are not simultaneous. A future timestamped control trigger could improve alignment but is not implemented. The two old telemetry captures cannot be retroactively paired with new frames.
+
+After a successful pilot, use new 120-second configs and `--duration 150` telemetry. Repeat three runs per workload, interleaving AI/player order to reduce thermal/order bias. Match arena, teams, camera, period length, score/period and practical match phase. Record controller input differences, stoppages/replays, AC/battery state/charge, power target and observed temperatures/clocks, display/caps/Proton identity, and telemetry/CSV paths. Label both as **rendered matches**. Reject or separately segment interruptions using known data rows; do not silently blend menus or change settings. Record normalized game-clock progression against stopwatch time on uninterrupted play; period-length rules and stoppages mean simulation timing is distinct from presentation FPS.
+
+Reject invalid GPU utilization without clamping/dividing; MangoHud GPU load might use the same broken driver source. Keep slowPPT labelled as platform/APU-related rather than GPU-only power. CPU/thread percentages overlap. Correlation can guide CPU/GPU/stall hypotheses but cannot establish GPU execution time, useful CPU work or wait causality by itself.
+
+### Stop and restore normal session
+
+The logging timer or Left Shift+F2 stops CSV logging; Ctrl-C stops only the telemetry collector and retains partial output. Normal gameplay can continue, but the Vulkan layer remains loaded for that process and may still impose overhead. Full baseline restoration requires a later approved normal game exit and ending the temporary Steam client session; then use the ordinary Steam entry point without profiling variables. Nothing is exported into the parent shell or persisted in launch settings. Keep configs/logs for analysis; they have no effect unless explicitly selected. No game/client termination is automated. Gaming Mode needs its own mangoapp/measurement-point validation and is not covered by Desktop pilot acceptance.
