@@ -108,6 +108,35 @@ class ProfilerTests(unittest.TestCase):
         self.assertIsNone(result['dpm_mclk']['value'])
         self.assertIsNotNone(result['hwmon9/freq1_input']['label']['error'])
 
+    def test_gpu_utilization_range_preserves_raw_without_rescaling(self):
+        device = self.root / 'gpu'
+        for raw in ('0', '37.5', '100', '101', '9966', '10000', '-1'):
+            with self.subTest(raw=raw):
+                self.put('gpu/gpu_busy_percent', raw)
+                item = profiler.gpu_sample(device)['sensors']['utilization']
+                self.assertEqual(item['raw_value'], float(raw))
+                if 0 <= float(raw) <= 100:
+                    self.assertEqual(item['value'], float(raw))
+                    self.assertIsNone(item['error'])
+                else:
+                    self.assertIsNone(item['value'])
+                    self.assertIn('Out-of-range', item['error'])
+
+    def test_gpu_utilization_unreadable_and_nonfinite_stay_unavailable(self):
+        device = self.root / 'gpu'
+        for raw in ('nan', 'inf', 'invalid'):
+            with self.subTest(raw=raw):
+                self.put('gpu/gpu_busy_percent', raw)
+                item = profiler.gpu_sample(device)['sensors']['utilization']
+                self.assertIsNone(item['value'])
+                self.assertIsNone(item['raw_value'])
+                self.assertIsNotNone(item['error'])
+                json.dumps(item, allow_nan=False)
+        with patch.object(Path, 'read_text', side_effect=PermissionError(errno.EACCES, 'denied')):
+            item = profiler.gpu_sample(device)['sensors']['utilization']
+        self.assertIsNone(item['value'])
+        self.assertIn('PermissionError', item['error'])
+
     def test_discovery_zero_and_multiple(self):
         devices, errors = profiler.discover(self.root)
         self.assertFalse(devices)

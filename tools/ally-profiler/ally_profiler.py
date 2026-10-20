@@ -62,6 +62,13 @@ def gpu_sample(device):
         out['errors'].append(str(exc))
     for name, path, scale, unit in specs:
         item = reading(path, scale, unit)
+        if name == 'utilization':
+            # gpu_busy_percent is already a percentage, not basis points.
+            # Preserve invalid driver readings as evidence; never clamp/rescale.
+            item['raw_value'] = item['value']
+            if item['value'] is not None and not 0 <= item['value'] <= 100:
+                item['error'] = 'Out-of-range gpu_busy_percent: expected 0..100 percent'
+                item['value'] = None
         prefix = path.name.split('_')[0]
         item['label'] = label(path.parent / f'{prefix}_label') if name != 'utilization' else None
         out['sensors'][name] = item

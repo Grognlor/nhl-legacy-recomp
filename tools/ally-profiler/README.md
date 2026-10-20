@@ -8,7 +8,7 @@ Run from the source checkout. All persistent tool output goes into unique timest
 
 Reads are limited to discovered AMD DRM/hwmon nodes, selected `/proc/<pid>/stat`, `/proc/<pid>/status`, task stat/status files, and an explicitly supplied CSV. It does not search for game assets, identify a game automatically, read command lines/environments, or follow descendants. Select the Linux host PID of `nhllegacy.exe`, not Steam, Proton's launcher or wineserver. To observe another process explicitly, repeat `--pid`.
 
-A normal game launch can write saves, caches or logs even though this tool is passive. **Game launch and any configuration changes require separate approval and an agreed test environment.** No gameplay results have been collected with this harness.
+A normal game launch can write saves, caches or logs even though this tool is passive. **Game launch and any configuration changes require separate approval and an agreed test environment.** User-recorded telemetry is analyzed in [report 005](../../reports/005-simulation-vs-live-bottleneck-investigation.md); synchronized gameplay frame-time results are still unavailable.
 
 ## Validate without a game
 
@@ -108,6 +108,8 @@ Add `--per-frame` only after verifying cadence and units for that producer. The 
 
 GPU discovery selects all DRM cards whose driver resolves to `amdgpu`; no silent first-GPU choice. hwmon temperature (millidegrees), frequency (Hz) and power (microwatts) are converted to C/MHz/W. Active `pp_dpm_sclk`/`pp_dpm_mclk` states are separate fields explicitly labelled **not instantaneous clocks**. Missing hwmon, utilization, clock, power and temperature data remain explicit. Sensor hotplug after initial discovery is not comprehensively handled.
 
+`gpu_busy_percent` already has percentage units: no multiplication/division is applied. Its numeric input is preserved in utilization `raw_value`; values outside 0–100 become null with an explicit error. Values near 10000 must not be divided by 100 or clamped without evidence for that sensor/driver. Older logs retain their original values: exclude invalid utilization when analyzing them, and do not assume the remaining in-range samples validate the sensor. See [report 005](../../reports/005-simulation-vs-live-bottleneck-investigation.md).
+
 CPU rates use deltas of `utime+stime` divided by elapsed seconds and `SC_CLK_TCK`; **100% means one logical core** and process totals can exceed 100%. Process and thread totals overlap: do not add them. Start ticks guard PID/TID identity; counter resets give null rates. Context-switch fields are cumulative counts, not latency. State is an instantaneous observation. `/proc` reads are not atomic; errors/races are retained. Spin/yield time consumes CPU, so these statistics cannot distinguish useful work from spinning or identify a GPU wait.
 
 CSV handling accepts UTF-8/BOM, optional metadata/version preamble, comma-separated headers with `frametime` or `frametime_ms`, and quoted fields. Bare `frametime` requires `--frametime-unit ms/us/ns/s`; `frametime_ms` explicitly denotes milliseconds. Summary/FPS-only logs, absent data and repeated/duplicate headers fail clearly. Selected malformed/nonpositive/nonfinite rows are counted with line numbers, excluded from distributions, and suppress FPS. No silent FPS-to-frametime substitution occurs.
@@ -115,6 +117,36 @@ CSV handling accepts UTF-8/BOM, optional metadata/version preamble, comma-separa
 Percentiles use linear interpolation at `(n-1)*p/100`. With a validated complete per-frame stream, mean FPS is `1000 * frame_count / sum(frame_ms)`; never the mean of instantaneous FPS values. p50/p90/p95/p99 are frame-time percentiles, not “1% low FPS.” Thresholds count frames **strictly greater** than 16.67/33.33/50/100 ms; fraction means fraction of valid rows/frames, not time fraction. Small samples make p99 weak. Without `--per-frame`, the same distributions are explicitly sample statistics and FPS is null.
 
 The importer does not infer CSV `elapsed` units/origin or automatically align frame logs with telemetry. MangoHud 0.8.4 uses elapsed nanoseconds relative to logging start, whereas telemetry uses host monotonic timestamps. Record an independent start marker for coarse correlation; precise synchronization needs future work. No tool output establishes game simulation timing, shader compilation cost, GPU timestamps or synchronization-stall duration.
+
+## Next simulation versus live comparison (approval required)
+
+The two user-recorded captures analyzed in report 005 contain telemetry but no synchronized frame log. The smallest useful next step is a Desktop application-layer frame-log pilot alongside unchanged passive telemetry. It cannot conclusively separate every bottleneck without valid GPU activity or wait attribution. No launch, configuration change or measurement is performed by this document.
+
+After approval, prepare an external MangoHud config with the profiler's output boundary (run this from the source checkout). This creates only a unique profiling directory and config, with exclusive creation:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path('tools/ally-profiler').resolve()))
+import ally_profiler
+run = ally_profiler.new_run()
+config = run / 'MangoHud.conf'
+with config.open('x') as stream:
+    stream.write('fps\nframe_timing\nlog_interval=0\nlog_duration=120\n'
+                 'toggle_logging=Shift_L+F2\npermit_upload=0\n'
+                 f'output_folder={run}\n')
+print(config)
+PY
+```
+
+For the next approved **Desktop Proton launch only**, the actual launch environment must include `MANGOHUD=1` and `MANGOHUD_CONFIGFILE` set to that printed absolute file path. Verify that no `MANGOHUD_CONFIG` override supersedes the file. Do not persist these in Steam launch options or a prefix. Starting `steam` with new environment variables while another Steam instance is running does not establish that they reach the game. We do not yet have a verified shortcut-free invocation for this installation: agree on the existing launcher/process-environment route before proceeding. An already-running game cannot retroactively acquire a Vulkan layer. If application logging is already active, confirm its effective config and output instead of injecting a second overlay.
+
+Use Shift+F2 to start a short pilot, verify an application-named numeric CSV is created outside the installation, then repeat with 120 s uninterrupted gameplay. The exact left-shift binding is configured above. Validate `frametime` in ms, monotonic `elapsed` in ns, cadence, duration and row count before passing `--per-frame`. Discard an anomalous first log interval by an explicit recorded row selection if necessary; do not silently clean spikes. Keep telemetry running over the whole log and record the logging-start event against an independent UTC/monotonic timestamp. Human key timing gives only approximate alignment; record that uncertainty. Do not infer precise time alignment from filenames.
+
+Keep teams, arena, camera, period length, difficulty, power/AC state, display refresh/caps and graphics settings matched. Define what “simulation” means (for example CPU-vs-CPU rendered match versus another mode); it is not automatically the same workload as live player control. Use one pair to validate logging, then three interleaved simulation/live pairs after thermal warm-up. Record gameplay interruptions and normalized match-clock progress manually, without screenshots or captures. Keep modes separate and compare FPS, frame-time percentiles/threshold fractions, thread CPU deltas, clocks and labelled power. Never add overlapping process/thread CPU figures or power channels.
+
+For later passive scheduling context, record the current Linux TIDs rather than assuming they remain 7148/7102. `ps -L -p "$NHL_PROFILE_PID" -o pid,tid,comm,psr,stat,pri,ni` shows names and instantaneous CPU/state. Read the selected task's `status` (`Cpus_allowed_list`) and `schedstat` before/after each run if permitted. The three schedstat values are cumulative run time (ns), runqueue delay (ns), and timeslices; zero/unavailable accounting does not prove no contention. These reads do not reveal guest functions or GPU-wait reasons. Do not modify affinity, priority or kernel scheduler settings.
 
 ## References
 
