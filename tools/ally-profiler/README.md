@@ -241,3 +241,87 @@ Reject invalid GPU utilization without clamping/dividing; MangoHud GPU load migh
 ### Stop and restore normal session
 
 The logging timer or Left Shift+F2 stops CSV logging; Ctrl-C stops only the telemetry collector and retains partial output. Normal gameplay can continue, but the Vulkan layer remains loaded for that process and may still impose overhead. Full baseline restoration requires a later approved normal game exit and ending the temporary Steam client session; then use the ordinary Steam entry point without profiling variables. Nothing is exported into the parent shell or persisted in launch settings. Keep configs/logs for analysis; they have no effect unless explicitly selected. No game/client termination is automated. Gaming Mode needs its own mangoapp/measurement-point validation and is not covered by Desktop pilot acceptance.
+
+## Task 017: targeted thread waits (future approved gameplay test)
+
+`thread_wait_sampler.py` is a standard-library, read-only companion. **It has not been tested against live NHL.** Synthetic success does not establish Bazzite/Wine compatibility, observable wait symbols, low gameplay overhead or diagnostic accuracy. No discovery/capture against NHL was run during development. Do not execute the workflow below until the user approves the live diagnostic.
+
+It reads only explicit process/task stat, status and wchan files plus host boot-ID metadata. No debugger, process memory, signals, GPU interfaces, scheduler changes or privilege escalation. `discover` observes candidate CPU ticks for two seconds; it does **not** launch NHL or automatically begin collection. Same-named candidates are ranked by activity, not enumeration order. Zero activity, ties/near-ties or changing candidate identities require another approved discovery or further review; exit status 2 means stop. Activity ranking is not a game-function identity.
+
+### Offline checks (safe now)
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/ally-profiler -p 'test_*.py'
+python3 tools/ally-profiler/thread_wait_sampler.py --help
+```
+
+### Review and identify current threads — only after capture approval
+
+Use an already-running Desktop Mode match. If no match is running, stop and request launch approval. Do not reuse historical PIDs/TIDs. In the source checkout:
+
+```bash
+ps -C nhllegacy.exe -C nhllegacy -o pid=,comm=
+read -r -p 'Verified current NHL Linux PID: ' NHL_WAIT_PID
+ps -p "$NHL_WAIT_PID" -o pid=,comm=
+# Verify the displayed process before running the next command.
+python3 tools/ally-profiler/thread_wait_sampler.py discover --pid "$NHL_WAIT_PID"
+```
+
+If the name filters find no unambiguous process, request the known current PID/name; do not guess. Review discovery's `candidates`, `selected`, `ambiguous`, process start ticks, observation timestamps and activity. A winner must have positive delta ticks and lead the runner-up by at least two ticks and 10% of the winner's ticks (rounded up). Both guest and GPU roles must be unambiguous. Short observations remain scene-dependent; do not assume these winners are permanent subsystems. Multiple GPU Commands threads may share a name.
+
+Only after reviewing successful discovery, manually enter the exact identities in **Terminal B**:
+
+```bash
+read -r -p 'Process start_ticks from discovery: ' NHL_WAIT_START
+read -r -p 'Confirmed guest TID:start_ticks from discovery: ' NHL_WAIT_GUEST
+read -r -p 'Confirmed active GPU TID:start_ticks from discovery: ' NHL_WAIT_GPU
+```
+
+The next command requires those explicit TID/start-tick values **and** `--confirm-tids`; it never chooses silently. Collection validates roles and identities before creating output and around every sample, stops on observed disappearance/reuse/name change/counter regression, and never follows replacements. Same-tick ID reuse or exit/re-exec retaining identity cannot be ruled out by `/proc` start ticks; no executable/memory inspection is added.
+
+### One 60-second comparison, three foreground terminals
+
+This workflow deliberately keeps each observer in its own foreground terminal so Ctrl-C can stop it without sending signals to NHL or relying on a new supervisor. Keep the game, graphics, power, controller mappings and existing uncapped launch unchanged.
+
+**Terminal A — existing rear-button recorder:** if already running, reuse it; never start a duplicate. Otherwise, after approval:
+
+```bash
+python3 "$HOME/nhl-ally-profiles/scene-marker.py"
+```
+
+The existing script was inspected read-only: it uses its existing evdev device, no grab call, code 710 for camera changes and 708 for freezes; key presses only. It appends UTC/monotonic markers to its existing `~/nhl-ally-profiles/scene-markers.jsonl`. Do not edit its device, mappings, append behavior or permissions. Its evdev Python module is discoverable locally, but actual input-node availability/permissions are **not tested** here. If it fails, stop; no sudo, package install or device reconfiguration. Do not add another recorder for the same buttons.
+
+**Terminal C — existing CPU/GPU telemetry:** enter the same verified process PID in this terminal, then start:
+
+```bash
+read -r -p 'Same verified NHL Linux PID: ' NHL_CPU_PID
+python3 tools/ally-profiler/ally_profiler.py collect \
+  --session desktop --pid "$NHL_CPU_PID" --duration 60 --interval 0.5
+```
+
+**Terminal B — start immediately after C:**
+
+```bash
+python3 tools/ally-profiler/thread_wait_sampler.py collect \
+  --pid "$NHL_WAIT_PID" --process-start "$NHL_WAIT_START" \
+  --guest "$NHL_WAIT_GUEST" --gpu "$NHL_WAIT_GPU" --confirm-tids \
+  --duration 60 --interval 0.2
+```
+
+The two collectors each allocate a separate unique, private run directory under `~/nhl-ally-profiles/`; they do not overwrite earlier evidence or the marker file. The wait sampler prints its path and stop reason at completion, with no per-sample terminal output. Its files are `metadata.json` and `thread-waits.jsonl`. Preserve both printed run paths and the existing marker-log location in private notes. Do not pass an arbitrary output directory. Commands are proposed; no game capture was performed to verify them end-to-end.
+
+Observe natural wide-angle play, bench/player close-ups and replays, with intro optional if naturally present. Use the rear buttons exactly as before. **Camera markers do not encode scene type or alternate states.** A second observer can write a private note keyed to each camera marker's ordinal/UTC: `wide`, `bench`, `player-closeup`, `replay`, `intro` or `unknown`, plus when it ends. Alternatively dictate/write numbered notes without changing input mappings, then manually reconcile them with timestamps. No screenshot or video recording is required. Solo notes are uncertain; retain reaction delay, missed transitions and focus changes explicitly. Do not infer labels from thread CPU behavior.
+
+Both collectors stop after their requested 60 seconds (reads/scheduling may overrun slightly); then Ctrl-C **Terminal A's recorder only**, unless it was already running and the user intends to leave it so. Do not terminate an unrelated existing recorder automatically. For early stop use Ctrl-C separately in each observer terminal, never in the game; the existing CPU collector otherwise runs until its deadline even if NHL exits. New sampler stops itself on target/selected-thread loss. Stop if observation noticeably worsens play or permissions/identity fail. No runtime configuration was changed, so rollback is cessation of observers. Preserve partial output. If no close-up/freeze occurs, report non-reproduction; no automatic repeat or game restart.
+
+### Bounds, correlation and interpretation
+
+Default targeted sampling: two selected threads, 0.2 s interval, 60 s (~300 samples). CLI permits duration 0.1–600 s and interval 0.1–10 s, capped at 6,000 samples and **8 MiB JSONL**, including a reserved end record. Each JSONL record is capped at 16 KiB. Reads are bounded (64 KiB stat/status, 256-byte wchan); discovery inspects at most 512 threads for at most ten requested seconds. Only current snapshots/candidates are held in memory. Output stops rather than silently dropping records at a limit; metadata is separately small/bounded. Files use exclusive creation inside the existing safe output boundary, including canonical Bazzite HOME support. Limits do not guarantee syscall latency or zero overhead. No catch-up read burst after a late sample.
+
+Each sample has UTC, `monotonic_ns`, read-end monotonic time and collection duration. Each thread has TID/start ticks/name/state, cumulative user+system CPU ticks and context-switch counts, plus a wchan object. `symbol` means a non-address string was exposed; **not that its interpretation is verified**. Hidden `0`, empty/`-`, numeric/address-like data are `unavailable_or_not_exposed` with raw text preserved. Missing/malformed/denied fields have explicit null/error/status; never substitute zero for missing counters or wait names. Some reads can be unavailable while valid stat/state observations continue. A selected thread disappearing stops the run, rather than silently switching to another match.
+
+Wait metadata records boot ID if readable, clock implementation/resolution, tick frequency and confirmed identities. Compare boot IDs where both exist; existing CPU/marker logs lack boot IDs. Align streams using monotonic timestamps over their actual overlapping coverage; compare UTC-minus-monotonic offsets for consistency and reject mixed boots/clock conventions rather than filename-aligning. Marker UTC is read before its monotonic value; sampler reads them in the opposite order. Small differences reflect that skew, human reaction and reading duration. UTC jumps do not change monotonic ordering. Exclude outside markers, not just those outside requested filenames/durations.
+
+Use ±1 s freeze neighborhoods initially, with 0.5/2 s sensitivity checks and typed-scene local controls. Do not equate unmarked with smooth. CPU rates can be derived from consecutive same-identity tick differences divided by `SC_CLK_TCK` and actual timestamp interval; reads are non-atomic and CPU/stat timestamps have acquisition skew. Existing profiler's own deltas remain the primary 0.5 s CPU series. Counter deltas measure switches, not wait time. Report sample gaps and collection cost before interpreting a stall.
+
+`R` is running **or runnable**, `S` is interruptible sleep, `D` is uninterruptible sleep of unknown cause. Generic futex/scheduling names do not identify GPU fences, SDK mutex ownership or guest functions. Snapshot counts do not establish wait durations. Busy CPU ticks cannot distinguish computation from polling. Driver-related wait names may justify further investigation but do not prove GPU saturation; the invalid GPU utilization source remains excluded. No unique-image, presentation, simulation-step, input-latency, GPU-completion or physical-display counter is added. This tool narrows host wait behavior and cannot replace Report 013's internal lineage diagnostic.
