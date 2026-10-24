@@ -123,8 +123,9 @@ def parse_stat(text):
 
 
 class ProcSampler:
-    def __init__(self, root=Path('/proc'), hz=None):
+    def __init__(self, root=Path('/proc'), hz=None, thread_limit=None):
         self.root = root
+        self.thread_limit = thread_limit
         self.hz = hz if hz is not None else os.sysconf('SC_CLK_TCK')
         self.previous = {}
         self.identities = {}
@@ -141,7 +142,13 @@ class ProcSampler:
             self.identities[pid] = identity
             paths = [(base, 'process')]
             try:
-                paths += [(p, 'thread') for p in (base / 'task').iterdir() if p.name.isdigit()]
+                tasks = []
+                for p in (base / 'task').iterdir():
+                    if p.name.isdigit():
+                        if self.thread_limit is not None and len(tasks) >= self.thread_limit:
+                            raise ValueError('Thread enumeration limit exceeded')
+                        tasks.append((p, 'thread'))
+                paths += tasks
             except OSError as exc:
                 result['errors'].append(f'Thread enumeration: {exc}')
             current = set()

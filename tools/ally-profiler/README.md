@@ -1,5 +1,7 @@
 # Ally profiler
 
+For new captures, see the [Task 019 one-command workflow](#task-019-one-command-timed-profiler). Earlier multi-terminal procedures remain historical references.
+
 Standard-library Python 3.9+ tools for read-only AMD GPU and Linux process/thread telemetry, plus MangoHud CSV analysis. No dependencies to install. The tool never launches a process, attaches a debugger, reads process memory, captures images/shaders, changes settings, or uploads anything. It does not modify Steam shortcuts or Proton prefixes.
 
 ## Safety and output
@@ -338,3 +340,73 @@ PYTHONDONTWRITEBYTECODE=1 python3 tools/ally-profiler/analyze_wait_capture.py \
 ```
 
 Both metadata files and selected thread identities must agree; missing/truncated or contradictory input raises an error. The marker file may span boots: UTC filters earlier sessions before monotonic compatibility checks. The 50 ms offset-discontinuity guard is an explicit sanity threshold, not claimed event precision. Results and raw evidence remain local; publish only reviewed aggregates. See [Report 018](../../reports/018-ally-wait-state-capture-analysis.md) for limits, non-overlap and findings. Its proposed new live recording still requires approval.
+
+## Task 019: one-command timed profiler
+
+**Current workflow; future live use requires approval.** The coordinator was validated with synthetic fixtures and offline recordings only, never against a live NHL process. Launch NHL normally yourself. The profiler never launches, restarts, attaches to, signals or modifies NHL/Steam, nor changes settings, mappings, priorities or power.
+
+```bash
+cd "$HOME/Projects/nhl-legacy-recomp" || exit 1
+python3 -B tools/ally-profiler/live_profiler.py --duration 120
+```
+
+Default duration is **120 seconds**; `--duration 300` works, with a safety range of 1–600 seconds. About two seconds of bounded thread discovery precede the requested capture timer. Exact readable process names `nhllegacy.exe`/`nhllegacy` are candidates; zero/multiple matches or ambiguous/changing thread activity stop before capture. Unreadable processes cannot be identified. Process names/thread names do not prove executable identity. No historical PID/TID or first matching GPU thread is reused. Task 019 authorizes automatic unambiguous selection in this coordinator; the standalone sampler's explicit-confirmation interface remains unchanged.
+
+### Rear buttons and scene labels
+
+By default the coordinator **only tails new lines** from the existing `~/nhl-ally-profiles/scene-markers.jsonl`. The external recorder must already be running; this tool neither starts nor stops it. Missing/invalid input is reported, not silently interpreted as no freezes. Old append-file content is not copied. The file is read-only, symlinks/replacement are refused and malformed lines noted. Marker UTC/monotonic coverage is checked offline.
+
+For a self-contained recording without a separate marker process, explicitly supply the node already used by the current recorder. Read-only inspection confirmed that its configuration currently names `/dev/input/event17`; **node identity, permissions and live behavior have not been tested**. Input numbering can change. A proposed first approved command, including optional scene entry, is:
+
+```bash
+python3 -B tools/ally-profiler/live_profiler.py \
+  --duration 120 --marker-device /dev/input/event17 --scenes
+```
+
+This reads the node nonblocking without evdev packages, ioctls, grabs, mapping changes or input writes. Only EV_KEY press values for **710 camera /708 freeze** are retained. Releases, repeats, other keys and axes are discarded without raw input logging. Existing recorder behavior/mappings are unchanged. Device mode ignores the external log, preventing double import if that recorder is also running; the profiler does not terminate it. Unsupported input layout, missing/denied node, device loss, overflow or excessive backlog is reported; no root retry, package install or configuration repair. Permission failure degrades marker coverage while numeric capture continues. Stop/review if the expected rear-button events do not appear. Do not guess another device.
+
+Direct-node event timestamps are host UTC/monotonic at processing time, matching the existing recorder's convention, not converted kernel event times. Polling can add ~0.1 s plus scheduling/read delay. A bounded drain avoids normal input backlog; SYN_DROPPED or backlog beyond its limit disables that source as unreliable. This is not an input-latency measurement.
+
+With `--scenes`, type a letter and **Enter** in the profiler terminal:
+
+| Key | Label/action |
+| --- | --- |
+| `w` | Wide gameplay |
+| `b` | Bench shot |
+| `p` | Player close-up |
+| `o` / `u` | Other /unknown |
+| `r` / `i` | Replay /introduction |
+| `f` / `c` | Optional terminal freeze/camera marker |
+| `q` | Stop the profiler only and produce a partial report |
+
+Scene labels persist until changed; default is unknown. Camera presses never imply alternating scenes. Prefer a second observer; solo typing/focus changes can perturb gameplay and introduce reaction delay. Do not report the same event via both terminal and rear button. Label return to wide play explicitly, leave uncertain scenes unknown, and do not change cameras/settings to manufacture a scene. Intervals crossing a scene-label transition are excluded from scene comparisons. Non-TTY stdin disables scene entry with a note. Terminal polling is nonblocking and no controller behavior changes.
+
+### Collection, outputs and stopping
+
+One scheduling loop interleaves existing `ProcSampler`/AMD sensor reads at **0.5 s** and selected thread `Proc.snapshot` wait-state reads at **0.2 s**, throughout the same shared monotonic deadline. The streams run concurrently over that window, **not as parallel atomic reads**. A slow read can delay the other stream. Timestamps and read spans reflect actual collection; no catch-up bursts or assumed synchronization. Actual overlap is computed from sample-window intersection only after clock checks. Non-overlap is zero; insufficient/inconsistent clocks produce **unverified**, not an invented zero. Gaps remain visible.
+
+Stop is automatic at the requested deadline; reads/scheduling can overrun slightly. Ctrl-C or `q` stops observers and generates a partial report without signaling NHL. PID/selected-TID loss/reuse/name change or counter regression stops both streams; never follows replacements. Missing sensors/wchan/status remain explicit. No FPS, presentation interval, GPU completion, animation-step or image-freshness counter is added.
+
+All output is exclusive/private under one unique `~/nhl-ally-profiles/TIMESTAMP-random/` directory, outside the playable installation:
+
+- `session.json`: initial identity/configuration; written before capture for recovery.
+- `completion.json`: final stop reason/errors and marker status; separate file, no metadata overwrite.
+- `telemetry/metadata.json`, `telemetry/telemetry.jsonl`.
+- `wait/metadata.json`, `wait/thread-waits.jsonl`, including final end record.
+- `markers.jsonl`, `scenes.jsonl`: this run's copied/observed event records.
+- `analysis.json`, **`report.md`**: automatically generated offline results.
+
+The report includes actual sample overlap, timing/gaps, selected CPU/context-switch/state/wchan statistics, process CPU, sensor ranges, per-stream freeze correlations and scene comparisons. Coverage passes only with compatible clocks, valid wait footer, ≥80% requested-time overlap, ≥80% nominal samples and ≥80% valid adjacent identity intervals. It is an overall gate, not proof every event was sampled adequately. Hidden waits are unknown, DRM/futex labels do not establish GPU saturation or ownership, and unmarked intervals are not necessarily smooth. The entire unreliable GPU utilization source is excluded. slowPPT is not GPU-only power; channels are not added. Read durations omit some observer work and are not a measured gameplay penalty.
+
+Default file caps: CPU JSONL **32 MiB**, waits **8 MiB**, markers/scenes **1 MiB each**, with per-record caps and reserved footer space. Discovery/task enumeration caps are retained; existing CPU sampler gains an optional 512-thread limit used only here. Limit/read/identity errors preserve partial data and stop or disable the affected optional marker source. Disk-full/power loss can prevent report persistence; existing files remain intact. Initial metadata supports later offline recovery. Memory during capture is bounded by current samples/candidates; analysis loads capped local files after recording, with higher transient memory use.
+
+The coordinator closes only its own file/device descriptors. Default external marker logging remains the user's separate process. No configuration needs rollback. Output includes private raw numeric/event data: **keep it local and never stage/upload captures**, even though it resides outside Git by default. `diagnostics/` remains locally excluded. `-B` avoids bytecode files.
+
+### Offline reanalysis, with no target access
+
+```bash
+python3 -B tools/ally-profiler/live_profiler.py \
+  --analyze "$HOME/nhl-ally-profiles/REPLACE_WITH_ACTUAL_COORDINATOR_RUN"
+```
+
+This reads that run and prints Markdown; it does not overwrite the prior report or access proc/input/GPU interfaces. Missing/truncated/partial recordings generate limitations where possible. No report can be reconstructed if initial metadata was never written. Device/clock incompatibility and synthetic test success are not evidence of live diagnostic accuracy. Review the report before publishing any aggregates. See [Report 019](../../reports/019-automated-live-profiler.md).
