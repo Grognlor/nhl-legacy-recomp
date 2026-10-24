@@ -325,3 +325,16 @@ Wait metadata records boot ID if readable, clock implementation/resolution, tick
 Use ±1 s freeze neighborhoods initially, with 0.5/2 s sensitivity checks and typed-scene local controls. Do not equate unmarked with smooth. CPU rates can be derived from consecutive same-identity tick differences divided by `SC_CLK_TCK` and actual timestamp interval; reads are non-atomic and CPU/stat timestamps have acquisition skew. Existing profiler's own deltas remain the primary 0.5 s CPU series. Counter deltas measure switches, not wait time. Report sample gaps and collection cost before interpreting a stall.
 
 `R` is running **or runnable**, `S` is interruptible sleep, `D` is uninterruptible sleep of unknown cause. Generic futex/scheduling names do not identify GPU fences, SDK mutex ownership or guest functions. Snapshot counts do not establish wait durations. Busy CPU ticks cannot distinguish computation from polling. Driver-related wait names may justify further investigation but do not prove GPU saturation; the invalid GPU utilization source remains excluded. No unique-image, presentation, simulation-step, input-latency, GPU-completion or physical-display counter is added. This tool narrows host wait behavior and cannot replace Report 013's internal lineage diagnostic.
+
+## Task 018: offline wait/CPU capture analysis
+
+`analyze_wait_capture.py` reads supplied recordings only. It validates schema, identities, clocks, counter monotonicity and the wait footer; filters markers by UTC **and** monotonic coverage; computes CPU/switch deltas, snapshot distributions, local event neighborhoods and phase summaries; and emits aggregate JSON to stdout. It does not sample proc/sysfs, write inputs or equate separate recordings with simultaneous data. Unknown channels remain unknown; all readings from the known-invalid utilization source are excluded. Use bytecode suppression to avoid adding cache files:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 tools/ally-profiler/analyze_wait_capture.py \
+  --wait-dir diagnostics/capture-017/20261024T045305Z-6yf86ze1 \
+  --telemetry-dir diagnostics/capture-017/20261024T045511Z-d6zw9zsz \
+  --markers diagnostics/capture-017/scene-markers.jsonl
+```
+
+Both metadata files and selected thread identities must agree; missing/truncated or contradictory input raises an error. The marker file may span boots: UTC filters earlier sessions before monotonic compatibility checks. The 50 ms offset-discontinuity guard is an explicit sanity threshold, not claimed event precision. Results and raw evidence remain local; publish only reviewed aggregates. See [Report 018](../../reports/018-ally-wait-state-capture-analysis.md) for limits, non-overlap and findings. Its proposed new live recording still requires approval.
